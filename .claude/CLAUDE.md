@@ -18,7 +18,8 @@ No test runner yet. Smoke-test with curl or the frontend dev server.
 
 | Layer | Tech |
 |---|---|
-| HTTP server | Express 4 |
+| Runtime | Node.js ≥ 20 (ESM) |
+| HTTP server | Express 5 |
 | WebSocket | ws (native, no Socket.IO) |
 | Database | better-sqlite3 (WAL mode) |
 | Media upload | multer (memory storage → write by CID) |
@@ -39,8 +40,10 @@ src/
     posts.js        ← GET /api/boards/:board/threads
                        GET /api/threads/:id
                        GET /api/sync?since=<ms>
-                       POST /api/posts
-    media.js        ← POST /api/media (upload), GET /api/media/:cid
+                       POST /api/posts  (Turnstile + ECDSA verify)
+    media.js        ← POST /api/media (upload)
+                       HEAD /api/media/:cid (existence check)
+                       GET  /api/media/:cid (serve)
   ws/
     hub.js          ← WebSocket server; subscribe/unsubscribe by board; broadcast()
   middleware/
@@ -57,29 +60,30 @@ data/
 ```
 GET  /api/health
 GET  /api/boards
-POST /api/boards                        body: { id, name, emoji? }
+POST /api/boards                          body: { id, name, emoji? }
 GET  /api/boards/:board/threads?page=1&limit=20
 GET  /api/threads/:id
-GET  /api/sync?since=<unixMs>&board=<id>   returns up to 500 posts
-POST /api/posts                         body: Post (see schema below)
-POST /api/media                         multipart/form-data field: file
+GET  /api/sync?since=<unixMs>&board=<id>  returns up to 500 posts
+POST /api/posts                           body: Post + cfToken
+POST /api/media                           multipart/form-data field: file
+HEAD /api/media/:cid
 GET  /api/media/:cid
 ```
 
-### WebSocket  `/ws`
+### WebSocket `/ws`
 
 Client sends JSON frames:
 ```json
-{ "type": "subscribe",   "board": "b"  }
-{ "type": "unsubscribe", "board": "b"  }
+{ "type": "subscribe",   "board": "b" }
+{ "type": "unsubscribe", "board": "b" }
 { "type": "ping" }
 ```
 
 Server pushes:
 ```json
-{ "type": "hello",   "serverTime": 1234567890000 }
+{ "type": "hello", "serverTime": 1234567890000 }
 { "type": "pong" }
-{ "type": "post",    "payload": <Post> }
+{ "type": "post",  "payload": <Post> }
 ```
 
 ## Post Schema
@@ -93,7 +97,7 @@ Server pushes:
   title:     string|null
   content:   string
   tags:      string[]|null
-  mediaCid:  string|null   // SHA-256 hex
+  mediaCid:  string|null   // SHA-256 hex (CID)
   createdAt: number        // Unix ms
   displayId: string|null   // 8-char hex from pubkey hash
   sig:       string|null   // ECDSA P-256 signature hex
@@ -101,19 +105,29 @@ Server pushes:
 }
 ```
 
+## Bot Protection (Cloudflare Turnstile)
+
+`POST /api/posts` validates a Turnstile token before accepting posts.
+
+- Frontend sends `cfToken` in the request body alongside the post
+- Relay verifies with `https://challenges.cloudflare.com/turnstile/v0/siteverify`
+- If `TURNSTILE_SECRET` is not set, verification is skipped (dev mode)
+- Invalid token → 403
+
 ## Identity / Signature Verification
 
-- Client may optionally attach `displayId`, `sig`, `pubkey` to a post.
+- Client may optionally attach `displayId`, `sig`, `pubkey` to a post
 - Relay verifies: `sig` = ECDSA-P256(SHA-256, privkey, JSON({ id, content }))
-- Posts without sig are accepted as anonymous (no pubkey stored).
-- If sig is present but invalid → 403.
+- Posts without sig are accepted as anonymous
+- If sig is present but invalid → 403
 
 ## Media / CID
 
-- CID = SHA-256 hex of raw file bytes (same as frontend `postsStore.js`).
-- Files are stored flat in `data/media/<cid>` (no extension).
-- MIME type tracked in the `media` SQLite table.
-- Response includes `Cache-Control: immutable` — content-addressed so safe to cache forever.
+- CID = SHA-256 hex of raw file bytes
+- Files stored flat in `data/media/<cid>` (no extension)
+- MIME type tracked in the `media` SQLite table
+- Served with `Cache-Control: immutable` — content-addressed, safe to cache forever
+- `HEAD /api/media/:cid` lets the frontend check existence before uploading
 
 ## Environment Variables
 
@@ -121,12 +135,13 @@ See `.env.example`. Copy to `.env` before running:
 
 ```
 PORT=3001
-HOST=0.0.0.0
-CORS_ORIGINS=http://localhost:5173,https://re95.org
-DB_PATH=./data/relay.db
-MEDIA_DIR=./data/media
+HOST=127.0.0.1
+CORS_ORIGINS=https://re95.org,http://localhost:5173
+DB_PATH=/home/pi/re95-relay/data/relay.db
+MEDIA_DIR=/home/pi/re95-relay/data/media
 MAX_MEDIA_MB=10
-RELAY_SECRET=change-me    # reserved for future relay-to-relay auth
+RELAY_SECRET=change-me       # reserved for relay-to-relay auth
+TURNSTILE_SECRET=            # Cloudflare Turnstile secret key; leave empty to disable
 ```
 
 ## Planned Phases
@@ -134,35 +149,17 @@ RELAY_SECRET=change-me    # reserved for future relay-to-relay auth
 | Phase | Status | Notes |
 |---|---|---|
 | 1 — Core API + DB | ✅ done | Express, SQLite, boards/posts/sync routes |
-| 2 — Media system | ✅ done | CID upload/serve, MIME filter, size limit |
+| 2 — Media system | ✅ done | CID upload/serve, MIME filter, size limit, HEAD check |
 | 3 — WebSocket push | ✅ done | board subscriptions, broadcast on POST |
 | 4 — Sig verification | ✅ done | ECDSA P-256 via Node webcrypto |
-| 5 — Production deploy | 🔲 todo | systemd unit, nginx proxy pass `/api` + `/ws` |
-| 6 — Frontend useSync.js | ✅ done | Vue composable: connect WS, delta pull, merge into Dexie |
-| 7 — Relay-to-relay sync | 🔲 todo | Pull from peer relays on connect; JWT/secret auth |
+| 5 — Production deploy | ✅ done | systemd unit, nginx proxy on re95.org |
+| 6 — Frontend useSync.js | ✅ done | Vue composable: WS push + delta pull + media back-fill |
+| 7 — Bot protection | ✅ done | Cloudflare Turnstile on POST /api/posts |
+| 8 — Relay-to-relay sync | 🔲 todo | Pull from peer relays on connect; JWT/secret auth |
 
-## nginx Proxy (Phase 5)
+## Production (systemd)
 
-Add to `/etc/nginx/sites-enabled/re95.org.conf`:
-
-```nginx
-location /api/ {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-}
-
-location /ws {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "Upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 86400;
-}
-```
-
-## systemd Service (Phase 5)
+Node is installed via nvm — use the full path in the service file:
 
 ```ini
 # /etc/systemd/system/re95-relay.service
@@ -174,16 +171,17 @@ After=network.target
 User=pi
 WorkingDirectory=/home/pi/re95-relay
 EnvironmentFile=/home/pi/re95-relay/.env
-ExecStart=/usr/bin/node src/index.js
+ExecStart=/home/pi/.nvm/versions/node/v20.20.2/bin/node src/index.js
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable re95-relay
-sudo systemctl start  re95-relay
+sudo systemctl enable --now re95-relay
 sudo journalctl -u re95-relay -f
 ```
