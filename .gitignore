@@ -1,0 +1,5 @@
+node_modules/
+data/relay.db
+data/media/
+*.log
+.env
