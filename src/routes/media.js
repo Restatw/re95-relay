@@ -51,7 +51,7 @@ router.post('/', (req, res) => {
 // GET /api/media/:cid
 router.get('/:cid', (req, res) => {
   const { cid } = req.params
-  if (!/^[0-9a-f]{64}$/.test(cid)) return res.status(400).json({ error: 'invalid cid' })
+  if (!/^[0-9a-f]{16,128}$/.test(cid)) return res.status(400).json({ error: 'invalid cid' })
 
   const row  = getDb().prepare('SELECT mime_type FROM media WHERE cid = ?').get(cid)
   const dest = path.join(MEDIA_DIR, cid)
