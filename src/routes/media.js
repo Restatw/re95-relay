@@ -48,19 +48,37 @@ router.post('/', (req, res) => {
   })
 })
 
-// GET /api/media/:cid
-router.get('/:cid', (req, res) => {
+function _resolveCid(req, res) {
   const { cid } = req.params
-  if (!/^[0-9a-f]{16,128}$/.test(cid)) return res.status(400).json({ error: 'invalid cid' })
-
+  if (!/^[0-9a-f]{16,128}$/.test(cid)) {
+    res.status(400).json({ error: 'invalid cid' })
+    return null
+  }
   const row  = getDb().prepare('SELECT mime_type FROM media WHERE cid = ?').get(cid)
   const dest = path.join(MEDIA_DIR, cid)
+  if (!row || !existsSync(dest)) {
+    res.status(404).json({ error: 'not found' })
+    return null
+  }
+  return { row, dest }
+}
 
-  if (!row || !existsSync(dest)) return res.status(404).json({ error: 'not found' })
-
-  res.setHeader('Content-Type', row.mime_type)
+// HEAD /api/media/:cid  — existence check (used by client media back-fill)
+router.head('/:cid', (req, res) => {
+  const result = _resolveCid(req, res)
+  if (!result) return
+  res.setHeader('Content-Type', result.row.mime_type)
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-  createReadStream(dest).pipe(res)
+  res.end()
+})
+
+// GET /api/media/:cid
+router.get('/:cid', (req, res) => {
+  const result = _resolveCid(req, res)
+  if (!result) return
+  res.setHeader('Content-Type', result.row.mime_type)
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+  createReadStream(result.dest).pipe(res)
 })
 
 export default router
