@@ -21,22 +21,31 @@ const upload = multer({
 })
 
 // POST /api/media  — upload a file, returns { cid, mimeType, size }
-router.post('/', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no valid file' })
+router.post('/', (req, res) => {
+  upload.single('file')(req, res, async (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: `file too large (max ${MAX_MB} MB)` })
+      }
+      return res.status(400).json({ error: err.message ?? 'upload error' })
+    }
 
-  const buf  = req.file.buffer
-  const cid  = createHash('sha256').update(buf).digest('hex')
-  const dest = path.join(MEDIA_DIR, cid)
+    if (!req.file) return res.status(400).json({ error: 'no valid file (unsupported type)' })
 
-  if (!existsSync(dest)) {
-    await writeFile(dest, buf)
-    getDb().prepare(`
-      INSERT OR IGNORE INTO media (cid, mime_type, size, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(cid, req.file.mimetype, buf.length, Date.now())
-  }
+    const buf  = req.file.buffer
+    const cid  = createHash('sha256').update(buf).digest('hex')
+    const dest = path.join(MEDIA_DIR, cid)
 
-  res.status(201).json({ cid, mimeType: req.file.mimetype, size: buf.length })
+    if (!existsSync(dest)) {
+      await writeFile(dest, buf)
+      getDb().prepare(`
+        INSERT OR IGNORE INTO media (cid, mime_type, size, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(cid, req.file.mimetype, buf.length, Date.now())
+    }
+
+    res.status(201).json({ cid, mimeType: req.file.mimetype, size: buf.length })
+  })
 })
 
 // GET /api/media/:cid
