@@ -138,7 +138,7 @@ RELAY_SECRET=change-me    # reserved for future relay-to-relay auth
 | 3 — WebSocket push | ✅ done | board subscriptions, broadcast on POST |
 | 4 — Sig verification | ✅ done | ECDSA P-256 via Node webcrypto |
 | 5 — Production deploy | 🔲 todo | systemd unit, nginx proxy pass `/api` + `/ws` |
-| 6 — Frontend useSync.js | 🔲 todo | Vue composable: connect WS, delta pull, merge into Dexie |
+| 6 — Frontend useSync.js | ✅ done | Vue composable: connect WS, delta pull, merge into Dexie |
 | 7 — Relay-to-relay sync | 🔲 todo | Pull from peer relays on connect; JWT/secret auth |
 
 ## nginx Proxy (Phase 5)
