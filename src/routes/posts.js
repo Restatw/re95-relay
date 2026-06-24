@@ -1,7 +1,16 @@
 import { Router } from 'express'
+import { webcrypto } from 'crypto'
 import { getDb } from '../db/index.js'
 import { broadcast } from '../ws/hub.js'
 import { verifyPost } from '../middleware/verify.js'
+
+const { subtle } = webcrypto
+
+function _fromHex(hex) {
+  const b = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  return b.buffer
+}
 
 const router = Router()
 
@@ -135,6 +144,37 @@ router.post('/posts', verifyTurnstile, verifyPost, (req, res) => {
   const out = { ...req.body, threadId: post.thread_id, mediaCid: post.media_cid, createdAt: post.created_at }
   broadcast({ type: 'post', payload: out })
   res.status(201).json(out)
+})
+
+// DELETE /api/posts/:id  — requires sig of { action: 'delete', id }
+router.delete('/posts/:id', async (req, res) => {
+  const { id } = req.params
+  const { sig } = req.body ?? {}
+
+  const db = getDb()
+  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(id)
+  if (!post) return res.status(404).json({ error: 'post not found' })
+  if (!post.pubkey || !sig) return res.status(403).json({ error: 'cannot verify ownership' })
+
+  try {
+    const key = await subtle.importKey(
+      'raw', _fromHex(post.pubkey),
+      { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']
+    )
+    const valid = await subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      key,
+      _fromHex(sig),
+      new TextEncoder().encode(JSON.stringify({ action: 'delete', id }))
+    )
+    if (!valid) return res.status(403).json({ error: 'invalid signature' })
+  } catch {
+    return res.status(403).json({ error: 'signature verification failed' })
+  }
+
+  db.prepare('DELETE FROM posts WHERE id = ?').run(id)
+  broadcast({ type: 'delete', payload: { id, board: post.board } })
+  res.json({ ok: true })
 })
 
 export default router
