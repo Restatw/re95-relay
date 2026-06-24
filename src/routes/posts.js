@@ -5,6 +5,27 @@ import { verifyPost } from '../middleware/verify.js'
 
 const router = Router()
 
+async function verifyTurnstile(req, res, next) {
+  const secret = process.env.TURNSTILE_SECRET
+  if (!secret) return next()
+
+  const token = req.body?.cfToken
+  if (!token) return res.status(400).json({ error: 'missing verification token' })
+
+  const resp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      secret,
+      response: token,
+      remoteip: req.headers['cf-connecting-ip'] || req.ip,
+    }),
+  })
+  const data = await resp.json()
+  if (!data.success) return res.status(403).json({ error: 'bot verification failed' })
+  next()
+}
+
 function deserialise(row) {
   if (!row) return null
   return { ...row, tags: row.tags ? JSON.parse(row.tags) : null }
@@ -76,11 +97,11 @@ router.get('/sync', (req, res) => {
 })
 
 // POST /api/posts
-router.post('/posts', verifyPost, (req, res) => {
+router.post('/posts', verifyTurnstile, verifyPost, (req, res) => {
   const { id, board, threadId, name, title, content, tags, mediaCid, createdAt, displayId, sig, pubkey } = req.body ?? {}
 
-  if (!id || !board || !content?.trim()) {
-    return res.status(400).json({ error: 'id, board, content required' })
+  if (!id || !board || (!content?.trim() && !mediaCid)) {
+    return res.status(400).json({ error: 'id and board required; content or image required' })
   }
 
   const db = getDb()
@@ -97,7 +118,7 @@ router.post('/posts', verifyPost, (req, res) => {
     thread_id:  threadId ?? 'root',
     name:       (name?.trim() || 'Anonymous'),
     title:      title?.trim() || null,
-    content:    content.trim(),
+    content:    content?.trim() ?? '',
     tags:       tags?.length ? JSON.stringify(tags) : null,
     media_cid:  mediaCid ?? null,
     created_at: createdAt ?? Date.now(),
