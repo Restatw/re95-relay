@@ -17,6 +17,7 @@ export function initSchema(db) {
       content     TEXT NOT NULL,
       tags        TEXT,                   -- JSON array serialised as string
       media_cid   TEXT,                   -- SHA-256 hex of media file
+      media_mime  TEXT,                   -- MIME type of media file
       created_at  INTEGER NOT NULL,
       display_id  TEXT,                   -- 8-char hex derived from pubkey
       sig         TEXT,                   -- ECDSA P-256 signature hex
@@ -35,4 +36,10 @@ export function initSchema(db) {
       created_at INTEGER NOT NULL
     );
   `)
+
+  // Migrate existing DBs: add media_mime if not present
+  const cols = db.prepare("PRAGMA table_info(posts)").all().map(c => c.name)
+  if (!cols.includes('media_mime')) {
+    db.exec("ALTER TABLE posts ADD COLUMN media_mime TEXT")
+  }
 }

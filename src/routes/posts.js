@@ -37,7 +37,11 @@ async function verifyTurnstile(req, res, next) {
 
 function deserialise(row) {
   if (!row) return null
-  return { ...row, tags: row.tags ? JSON.parse(row.tags) : null }
+  return {
+    ...row,
+    tags:       row.tags       ? JSON.parse(row.tags) : null,
+    media_mime: row.media_mime ?? null,
+  }
 }
 
 // GET /api/boards/:board/threads?page=1&limit=20
@@ -107,7 +111,7 @@ router.get('/sync', (req, res) => {
 
 // POST /api/posts
 router.post('/posts', verifyTurnstile, verifyPost, (req, res) => {
-  const { id, board, threadId, name, title, content, tags, mediaCid, createdAt, displayId, sig, pubkey } = req.body ?? {}
+  const { id, board, threadId, name, title, content, tags, mediaCid, mediaMime, createdAt, displayId, sig, pubkey } = req.body ?? {}
 
   if (!id || !board || (!content?.trim() && !mediaCid)) {
     return res.status(400).json({ error: 'id and board required; content or image required' })
@@ -130,6 +134,7 @@ router.post('/posts', verifyTurnstile, verifyPost, (req, res) => {
     content:    content?.trim() ?? '',
     tags:       tags?.length ? JSON.stringify(tags) : null,
     media_cid:  mediaCid ?? null,
+    media_mime: mediaMime ?? null,
     created_at: createdAt ?? Date.now(),
     display_id: displayId ?? null,
     sig:        sig ?? null,
@@ -137,11 +142,11 @@ router.post('/posts', verifyTurnstile, verifyPost, (req, res) => {
   }
 
   db.prepare(`
-    INSERT INTO posts (id, board, thread_id, name, title, content, tags, media_cid, created_at, display_id, sig, pubkey)
-    VALUES (@id, @board, @thread_id, @name, @title, @content, @tags, @media_cid, @created_at, @display_id, @sig, @pubkey)
+    INSERT INTO posts (id, board, thread_id, name, title, content, tags, media_cid, media_mime, created_at, display_id, sig, pubkey)
+    VALUES (@id, @board, @thread_id, @name, @title, @content, @tags, @media_cid, @media_mime, @created_at, @display_id, @sig, @pubkey)
   `).run(post)
 
-  const out = { ...req.body, threadId: post.thread_id, mediaCid: post.media_cid, createdAt: post.created_at }
+  const out = { ...req.body, threadId: post.thread_id, mediaCid: post.media_cid, mediaMime: post.media_mime, createdAt: post.created_at }
   broadcast({ type: 'post', payload: out })
   res.status(201).json(out)
 })
